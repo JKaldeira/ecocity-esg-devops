@@ -1,0 +1,15 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: ecocity-api
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://admin:admin123@localhost:27017/ecocity_esg?authSource=admin}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -1,0 +1,112 @@
+name: CI/CD Pipeline - EcoCity ESG
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # ===================== ETAPA 1: BUILD E TESTES =====================
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Compilação e Testes Unitários
+        run: mvn clean test
+
+      - name: Empacotamento do Artefato (Build)
+        run: mvn package -DskipTests
+
+      - name: Salvar Artefato JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+
+  # ================= ETAPA 2: DEPLOY EM STAGING ======================
+  deploy-staging:
+    name: Deploy - Ambiente Staging
+    needs: build-and-test
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Preparar variáveis de ambiente
+        run: cp .env.example .env
+
+      - name: Subir Serviços de Staging
+        run: docker compose up -d --build mongodb-staging api-staging
+
+      - name: Health Check do Ambiente de Staging
+        run: |
+          echo "Aguardando a aplicação de staging responder em /health..."
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8081/health; then
+              echo ""
+              echo "Deploy em Staging concluído com sucesso."
+              exit 0
+            fi
+            echo "Tentativa $i/30 - aplicação ainda inicializando..."
+            sleep 5
+          done
+          echo "Falha no health check de staging. Logs dos contêineres:"
+          docker compose logs api-staging mongodb-staging
+          exit 1
+
+      - name: Encerrar Ambiente de Staging
+        if: always()
+        run: docker compose down
+
+  # ================ ETAPA 3: DEPLOY EM PRODUÇÃO ======================
+  deploy-production:
+    name: Deploy - Ambiente Produção
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Preparar variáveis de ambiente
+        run: cp .env.example .env
+
+      - name: Subir Serviços de Produção
+        run: docker compose up -d --build mongodb-prod api-prod
+
+      - name: Health Check do Ambiente de Produção
+        run: |
+          echo "Aguardando a aplicação de produção responder em /health..."
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8080/health; then
+              echo ""
+              echo "Deploy em Produção concluído com sucesso."
+              exit 0
+            fi
+            echo "Tentativa $i/30 - aplicação ainda inicializando..."
+            sleep 5
+          done
+          echo "Falha no health check de produção. Logs dos contêineres:"
+          docker compose logs api-prod mongodb-prod
+          exit 1
+
+      - name: Validar Endpoint de Negócio
+        run: curl -fs http://localhost:8080/api/lixeiras
+
+      - name: Encerrar Ambiente de Produção
+        if: always()
+        run: docker compose down
